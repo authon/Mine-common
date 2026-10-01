@@ -31,6 +31,12 @@ runs:
     - name: SSH远程连接（make menuconfig）
       if: env.SSH_ACTION == 'true'
       uses: authon/Mine-debugger-action@main
+      env:
+        # 在线 SSH 会话保持多少分钟，默认 30 分钟。
+        # 想改的话在仓库 Settings -> Secrets and variables -> Actions -> Variables
+        # 里加一个 SSH_TIMEOUT_MIN 就行，不用改 YAML。
+        TIMEOUT_MIN: ${{ vars.SSH_TIMEOUT_MIN || '30' }}
+        SSHX_NAME: ${{ github.repository }}#${{ github.run_number }}
 
     - name: 生成配置文件和提取机型
       shell: bash
