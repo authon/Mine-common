@@ -5,7 +5,7 @@
 function tongbu_0() {
 # 第一步下载上游仓库
 
-GITHUD_REPOSITORY="281677160/build-actions"
+GITHUD_REPOSITORY="authon/Mine-build-actions"
 
 if [[ "${TONGBU_CANGKU}" == "1" ]]; then
   sudo rm -rf repogx
@@ -150,7 +150,7 @@ sudo chmod -R +x ${GITHUB_WORKSPACE}/repogx
 
 function github_establish() {
 rm -rf shangyoues
-git clone -b main https://github.com/281677160/build-actions.git shangyoues
+git clone -b main https://github.com/authon/Mine-build-actions.git shangyoues
 if [[ ! -d "repogx" ]]; then
   git clone -b main https://github.com/${GIT_REPOSITORY}.git repogx
 fi

@@ -3,7 +3,7 @@
 #====================================================
 #	MANUFACTURER:	281677160
 #	Dscription: openwrt onekey Management
-#	github: https://github.com/281677160/build-actions
+#	github: https://github.com/authon/Mine-build-actions
 #====================================================
 
 # 字体颜色配置

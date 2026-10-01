@@ -1,4 +1,81 @@
 #!/bin/bash
+#=====================================================
+# svn 兼容层（2026 年新增）
+# GitHub 已经在 2024-01-08 关闭了 SVN 接口，脚本里所有
+#   svn co / svn export https://github.com/...
+# 都会直接报错（E170013 / E670008）。下面用同名函数把 svn 调用
+# 翻译成 git 的稀疏检出，调用处一行都不用改。
+# 支持三种写法：
+#   .../<owner>/<repo>/trunk/<路径>             -> 默认分支（main 或 master）
+#   .../<owner>/<repo>/branches/<分支>/<路径>    -> 指定分支
+#   .../<owner>/<repo>/tags/<标签>/<路径>        -> 指定标签
+#=====================================================
+function svn() {
+  local cmd="${1:-}"; shift 2>/dev/null || true
+  case "$cmd" in
+    co|checkout|export|ex) ;;
+    *)
+      echo "svn 兼容层：只支持 co / checkout / export（收到 [$cmd]）" >&2
+      return 1 ;;
+  esac
+  while [[ "${1:-}" == -* ]]; do shift; done
+  local url="${1:-}" dest="${2:-}"
+  if [[ -z "$url" || -z "$dest" ]]; then
+    echo "svn 兼容层：用法 svn co <github地址> <目标目录>" >&2
+    return 1
+  fi
+  case "$url" in
+    https://github.com/*) ;;
+    *)
+      echo "svn 兼容层：只支持 github.com 地址（收到 $url）" >&2
+      return 1 ;;
+  esac
+
+  local rest="${url#https://github.com/}"
+  local owner="${rest%%/*}"; rest="${rest#*/}"
+  local repo="${rest%%/*}";  rest="${rest#*/}"
+  local kind="${rest%%/*}";  rest="${rest#*/}"
+  local ref="" subpath=""
+  case "$kind" in
+    trunk)    subpath="$rest" ;;
+    branches) ref="${rest%%/*}"; subpath="${rest#*/}" ;;
+    tags)     ref="${rest%%/*}"; subpath="${rest#*/}" ;;
+    *)        subpath="${kind}${rest:+/$rest}" ;;
+  esac
+  local repo_url="https://github.com/${owner}/${repo}.git"
+
+  if [[ -z "$ref" ]]; then
+    ref="$(git ls-remote --symref "$repo_url" HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\).*|\1|p' | head -1 || true)"
+    [[ -z "$ref" ]] && ref="master"
+  fi
+
+  local tmpdir; tmpdir="$(mktemp -d)"
+  echo "svn 兼容层: ${owner}/${repo} ${kind}[${ref}] 路径[${subpath:-/}] -> ${dest}"
+  if git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$ref" "$repo_url" "$tmpdir/repo" 2>/dev/null; then
+    if [[ -n "$subpath" ]]; then
+      git -C "$tmpdir/repo" sparse-checkout set --no-cone "$subpath" >/dev/null 2>&1 || true
+    fi
+  elif git clone --quiet --depth 1 --branch "$ref" "$repo_url" "$tmpdir/repo" 2>/dev/null; then
+    :
+  else
+    echo "svn 兼容层: 拉取 ${owner}/${repo} 失败" >&2
+    rm -rf "$tmpdir"; return 1
+  fi
+
+  local src="$tmpdir/repo"
+  [[ -n "$subpath" ]] && src="$tmpdir/repo/$subpath"
+  if [[ ! -d "$src" ]]; then
+    echo "svn 兼容层: ${owner}/${repo} 的 ${kind}[${ref}] 里没有 [${subpath}]" >&2
+    rm -rf "$tmpdir"; return 1
+  fi
+  mkdir -p "$dest" || { rm -rf "$tmpdir"; return 1; }
+  cp -a "$src/." "$dest/" 2>/dev/null || cp -rf "$src/." "$dest/"
+  local rc=$?
+  rm -rf "$tmpdir"
+  return $rc
+}
+
+
 
 if [[ -d "${HOME_PATH}/package/new/luci-app-passwall" ]]; then
   exit 0

@@ -1,5 +1,82 @@
 #!/bin/bash
-# https://github.com/281677160/build-actions
+#=====================================================
+# svn 兼容层（2026 年新增）
+# GitHub 已经在 2024-01-08 关闭了 SVN 接口，脚本里所有
+#   svn co / svn export https://github.com/...
+# 都会直接报错（E170013 / E670008）。下面用同名函数把 svn 调用
+# 翻译成 git 的稀疏检出，调用处一行都不用改。
+# 支持三种写法：
+#   .../<owner>/<repo>/trunk/<路径>             -> 默认分支（main 或 master）
+#   .../<owner>/<repo>/branches/<分支>/<路径>    -> 指定分支
+#   .../<owner>/<repo>/tags/<标签>/<路径>        -> 指定标签
+#=====================================================
+function svn() {
+  local cmd="${1:-}"; shift 2>/dev/null || true
+  case "$cmd" in
+    co|checkout|export|ex) ;;
+    *)
+      echo "svn 兼容层：只支持 co / checkout / export（收到 [$cmd]）" >&2
+      return 1 ;;
+  esac
+  while [[ "${1:-}" == -* ]]; do shift; done
+  local url="${1:-}" dest="${2:-}"
+  if [[ -z "$url" || -z "$dest" ]]; then
+    echo "svn 兼容层：用法 svn co <github地址> <目标目录>" >&2
+    return 1
+  fi
+  case "$url" in
+    https://github.com/*) ;;
+    *)
+      echo "svn 兼容层：只支持 github.com 地址（收到 $url）" >&2
+      return 1 ;;
+  esac
+
+  local rest="${url#https://github.com/}"
+  local owner="${rest%%/*}"; rest="${rest#*/}"
+  local repo="${rest%%/*}";  rest="${rest#*/}"
+  local kind="${rest%%/*}";  rest="${rest#*/}"
+  local ref="" subpath=""
+  case "$kind" in
+    trunk)    subpath="$rest" ;;
+    branches) ref="${rest%%/*}"; subpath="${rest#*/}" ;;
+    tags)     ref="${rest%%/*}"; subpath="${rest#*/}" ;;
+    *)        subpath="${kind}${rest:+/$rest}" ;;
+  esac
+  local repo_url="https://github.com/${owner}/${repo}.git"
+
+  if [[ -z "$ref" ]]; then
+    ref="$(git ls-remote --symref "$repo_url" HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\).*|\1|p' | head -1 || true)"
+    [[ -z "$ref" ]] && ref="master"
+  fi
+
+  local tmpdir; tmpdir="$(mktemp -d)"
+  echo "svn 兼容层: ${owner}/${repo} ${kind}[${ref}] 路径[${subpath:-/}] -> ${dest}"
+  if git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$ref" "$repo_url" "$tmpdir/repo" 2>/dev/null; then
+    if [[ -n "$subpath" ]]; then
+      git -C "$tmpdir/repo" sparse-checkout set --no-cone "$subpath" >/dev/null 2>&1 || true
+    fi
+  elif git clone --quiet --depth 1 --branch "$ref" "$repo_url" "$tmpdir/repo" 2>/dev/null; then
+    :
+  else
+    echo "svn 兼容层: 拉取 ${owner}/${repo} 失败" >&2
+    rm -rf "$tmpdir"; return 1
+  fi
+
+  local src="$tmpdir/repo"
+  [[ -n "$subpath" ]] && src="$tmpdir/repo/$subpath"
+  if [[ ! -d "$src" ]]; then
+    echo "svn 兼容层: ${owner}/${repo} 的 ${kind}[${ref}] 里没有 [${subpath}]" >&2
+    rm -rf "$tmpdir"; return 1
+  fi
+  mkdir -p "$dest" || { rm -rf "$tmpdir"; return 1; }
+  cp -a "$src/." "$dest/" 2>/dev/null || cp -rf "$src/." "$dest/"
+  local rc=$?
+  rm -rf "$tmpdir"
+  return $rc
+}
+
+
+# https://github.com/authon/Mine-build-actions
 # common Module by 28677160
 # matrix.target=${FOLDER_NAME}
 
@@ -299,7 +376,7 @@ fi
 
 
 function Diy_update() {
-bash <(curl -fsSL https://raw.githubusercontent.com/281677160/common/main/custom/ubuntu.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/custom/ubuntu.sh)
 if [[ $? -ne 0 ]];then
   TIME r "依赖安装失败，请检测网络后再次尝试!"
   exit 1
@@ -448,9 +525,9 @@ fi
 
 settingss="$(find "${HOME_PATH}/package" -type d -name "default-settings")"
 if [[ ! -d "${settingss}" ]] && [[ "${applica}" == "1" ]]; then
-  svn export https://github.com/281677160/common/trunk/OFFICIAL/default-settings ${HOME_PATH}/package/default-settings > /dev/null 2>&1
+  svn export https://github.com/authon/Mine-common/tags/API/OFFICIAL/default-settings ${HOME_PATH}/package/default-settings > /dev/null 2>&1
 elif [[ ! -d "${settingss}" ]] && [[ "${applica}" == "2" ]]; then
-  svn export https://github.com/281677160/common/trunk/COOLSNOWWOLF/default-settings ${HOME_PATH}/package/default-settings > /dev/null 2>&1
+  svn export https://github.com/authon/Mine-common/tags/API/COOLSNOWWOLF/default-settings ${HOME_PATH}/package/default-settings > /dev/null 2>&1
 fi
 
 if [[ -d "${HOME_PATH}/extra" ]]; then
@@ -463,17 +540,17 @@ else
   done
 fi
 if [[ "${applica}" == "1" ]]; then
-  git clone -b 21.02 https://github.com/281677160/luci-theme-argon "${HOME_PATH}/feeds/luci/themes/luci-theme-argon" > /dev/null 2>&1
-  git clone -b argon-config https://github.com/281677160/luci-theme-argon "${HOME_PATH}/feeds/luci/applications/luci-app-argon-config" > /dev/null 2>&1
+  git clone -b 21.02 https://github.com/authon/Mine-luci-theme-argon "${HOME_PATH}/feeds/luci/themes/luci-theme-argon" > /dev/null 2>&1
+  git clone -b argon-config https://github.com/authon/Mine-luci-theme-argon "${HOME_PATH}/feeds/luci/applications/luci-app-argon-config" > /dev/null 2>&1
 elif [[ "${applica}" == "2" ]]; then
   if [[ "${GL_BRANCH}" == "lede_ax1800" ]]; then
-    git clone -b argonv3 https://github.com/281677160/luci-theme-argon "${HOME_PATH}/extra/luci/themes/luci-theme-argonv3" > /dev/null 2>&1
-    git clone -b 18.06 https://github.com/281677160/luci-theme-argon "${HOME_PATH}//extra/luci/themes/luci-theme-argon" > /dev/null 2>&1
-    git clone -b argon-config https://github.com/281677160/luci-theme-argon "${HOME_PATH}/extra/luci/applications/luci-app-argon-config" > /dev/null 2>&1
+    git clone -b argonv3 https://github.com/authon/Mine-luci-theme-argon "${HOME_PATH}/extra/luci/themes/luci-theme-argonv3" > /dev/null 2>&1
+    git clone -b 18.06 https://github.com/authon/Mine-luci-theme-argon "${HOME_PATH}//extra/luci/themes/luci-theme-argon" > /dev/null 2>&1
+    git clone -b argon-config https://github.com/authon/Mine-luci-theme-argon "${HOME_PATH}/extra/luci/applications/luci-app-argon-config" > /dev/null 2>&1
   else
-    git clone -b argonv3 https://github.com/281677160/luci-theme-argon "${HOME_PATH}/feeds/luci/themes/luci-theme-argonv3" > /dev/null 2>&1
-    git clone -b 18.06 https://github.com/281677160/luci-theme-argon "${HOME_PATH}/feeds/luci/themes/luci-theme-argon" > /dev/null 2>&1
-    git clone -b argon-config https://github.com/281677160/luci-theme-argon "${HOME_PATH}/feeds/luci/applications/luci-app-argon-config" > /dev/null 2>&1
+    git clone -b argonv3 https://github.com/authon/Mine-luci-theme-argon "${HOME_PATH}/feeds/luci/themes/luci-theme-argonv3" > /dev/null 2>&1
+    git clone -b 18.06 https://github.com/authon/Mine-luci-theme-argon "${HOME_PATH}/feeds/luci/themes/luci-theme-argon" > /dev/null 2>&1
+    git clone -b argon-config https://github.com/authon/Mine-luci-theme-argon "${HOME_PATH}/feeds/luci/applications/luci-app-argon-config" > /dev/null 2>&1
   fi
 fi
 
@@ -488,9 +565,9 @@ elif [[ -d "${HOME_PATH}/feeds/luci/collections/luci-light" ]] && [[ `grep -c 'a
 fi
 
 if [[ "${REPO_BRANCH}" =~ (19.07|19.07-test|openwrt-19.07) ]]; then
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/281677160/common/main/LIENOL/19.07/package/kernel/linux/modules/netsupport.sh)"
-  rm -rf ${HOME_PATH}/feeds/packages/libs/libcap && svn export https://github.com/281677160/common/trunk/LIENOL/19.07/feeds/packages/libs/libcap ${HOME_PATH}/feeds/packages/libs/libcap > /dev/null 2>&1
-  rm -rf ${HOME_PATH}/package/libs/libpcap && svn export https://github.com/281677160/common/trunk/LIENOL/19.07/package/libs/libpcap ${HOME_PATH}/package/libs/libpcap > /dev/null 2>&1
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/LIENOL/19.07/package/kernel/linux/modules/netsupport.sh)"
+  rm -rf ${HOME_PATH}/feeds/packages/libs/libcap && svn export https://github.com/authon/Mine-common/tags/API/LIENOL/19.07/feeds/packages/libs/libcap ${HOME_PATH}/feeds/packages/libs/libcap > /dev/null 2>&1
+  rm -rf ${HOME_PATH}/package/libs/libpcap && svn export https://github.com/authon/Mine-common/tags/API/LIENOL/19.07/package/libs/libpcap ${HOME_PATH}/package/libs/libpcap > /dev/null 2>&1
 fi
 
 if [[ ! -d "${HOME_PATH}/feeds/packages/devel/packr" ]]; then
@@ -563,7 +640,7 @@ echo -e "\nDISTRIB_RECOGNIZE='18'" >> "${REPAIR_PATH}" && sed -i '/^\s*$/d' "${R
 
 case "${GL_BRANCH}" in
 lede_ax1800)
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/281677160/common/main/LIENOL/19.07/package/kernel/linux/modules/netsupport.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/LIENOL/19.07/package/kernel/linux/modules/netsupport.sh)"
 ;;
 esac
 }
@@ -602,7 +679,7 @@ master)
   sed -i '/DISTRIB_RECOGNIZE/d' "${REPAIR_PATH}"
   echo -e "\nDISTRIB_RECOGNIZE='20'" >> "${REPAIR_PATH}" && sed -i '/^\s*$/d' "${REPAIR_PATH}"
 
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/281677160/common/main/LIENOL/19.07/package/kernel/linux/modules/netsupport.sh)"
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/LIENOL/19.07/package/kernel/linux/modules/netsupport.sh)"
 
 ;;
 22.03)
@@ -728,7 +805,7 @@ elif [[ `grep -c 'default-settings' "${HOME_PATH}/include/target.mk"` -eq '0' ]]
 fi
 
 if [[ "${REPO_BRANCH}" = "openwrt-21.02" ]]; then
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/281677160/common/main/LIENOL/19.07/package/kernel/linux/modules/netsupport.sh)"
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/LIENOL/19.07/package/kernel/linux/modules/netsupport.sh)"
 fi
 
 if [[ `grep -c "net.netfilter.nf_conntrack_helper" ${HOME_PATH}/package/kernel/linux/files/sysctl-nf-conntrack.conf` -eq '0' ]]; then
@@ -754,7 +831,7 @@ if [[ -n "${ttydjso}" ]]; then
   ttydjson="${HOME_PATH}/${ttydjso}"
 fi
 if [[ -f "${ttydjson}" ]]; then
-  curl -fsSL https://raw.githubusercontent.com/281677160/common/main/IMMORTALWRT/ttyd/luci-app-ttyd.json -o "${ttydjson}"
+  curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/IMMORTALWRT/ttyd/luci-app-ttyd.json -o "${ttydjson}"
 fi
 
 
@@ -809,7 +886,7 @@ sed -i '/helloworld/d' "${HOME_PATH}/feeds.conf.default"
 sed -i '/passwall/d' "${HOME_PATH}/feeds.conf.default"
 
 cat >>"${HOME_PATH}/feeds.conf.default" <<-EOF
-src-git danshui https://github.com/281677160/openwrt-package.git;${PACKAGE_BRANCH}
+src-git danshui https://github.com/authon/Mine-openwrt-package.git;${PACKAGE_BRANCH}
 EOF
 
 if [[ "${SOURCE_CODE}" == "OFFICIAL" ]] && [[ "${REPO_BRANCH}" == "openwrt-19.07" ]]; then
@@ -1534,7 +1611,7 @@ fi
 if [[ `grep -c "CONFIG_PACKAGE_luci-theme-argon=y" ${HOME_PATH}/.config` -eq '1' ]]; then
   pmg="$(echo "$(date +%d)" | sed 's/^.//g')"
   mkdir -p ${HOME_PATH}/files/www/luci-static/argon/background
-  curl -fsSL  https://raw.githubusercontent.com/281677160/openwrt-package/usb/argon/jpg/${pmg}.jpg > ${HOME_PATH}/files/www/luci-static/argon/background/moren.jpg
+  curl -fsSL  https://raw.githubusercontent.com/authon/Mine-openwrt-package/usb/argon/jpg/${pmg}.jpg > ${HOME_PATH}/files/www/luci-static/argon/background/moren.jpg
   if [[ $? -ne 0 ]]; then
     echo "拉取文件错误,请检测网络"
     exit 1
@@ -1586,7 +1663,7 @@ if [[ `grep -c "CONFIG_PACKAGE_luci-app-unblockneteasemusic=y" ${HOME_PATH}/.con
 fi
 
 if [[ `grep -c "CONFIG_PACKAGE_ntfs-3g=y" ${HOME_PATH}/.config` -eq '1' ]]; then
-  mkdir -p ${HOME_PATH}/files/etc/hotplug.d/block && curl -fsSL  https://raw.githubusercontent.com/281677160/openwrt-package/usb/block/10-mount > ${HOME_PATH}/files/etc/hotplug.d/block/10-mount
+  mkdir -p ${HOME_PATH}/files/etc/hotplug.d/block && curl -fsSL  https://raw.githubusercontent.com/authon/Mine-openwrt-package/usb/block/10-mount > ${HOME_PATH}/files/etc/hotplug.d/block/10-mount
   if [[ $? -ne 0 ]]; then
     echo "拉取文件错误,请检测网络"
     exit 1
@@ -2079,7 +2156,7 @@ cd ${GITHUB_WORKSPACE}
 export FIRMWARE_PATH="${HOME_PATH}/bin/targets/armvirt/64"
 [[ -z "${amlogic_model}" ]] && export amlogic_model="s905d"
 if [[ -z "${amlogic_kernel}" ]]; then
-  curl -fsSL https://github.com/281677160/common/releases/download/API/stable.api -o ${HOME_PATH}/stable.api
+  curl -fsSL https://github.com/authon/Mine-common/releases/download/API/stable.api -o ${HOME_PATH}/stable.api
   export amlogic_kernel="$(grep -Eo '"name": "[0-9]+\.[0-9]+\.[0-9]+"' "${HOME_PATH}/stable.api" |grep -Eo "[0-9]+\.[0-9]+\.[0-9]+" |awk 'NR==1')"
   [[ -z "${amlogic_kernel}" ]] && export amlogic_kernel="5.10.170"
 fi

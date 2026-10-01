@@ -47,7 +47,7 @@ endef
 fi
 
 if [[ `grep -c "kmod-netlink-diag" package/network/utils/iproute2/Makefile` -eq '0' ]]; then
-  curl -fsSL https://raw.githubusercontent.com/281677160/common/main/LIENOL/19.07/package/network/utils/iproute2/netlink_diag > netlink_diag
+  curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/LIENOL/19.07/package/network/utils/iproute2/netlink_diag > netlink_diag
   sed -i "/Socket statistics utility/a\danshui" package/network/utils/iproute2/Makefile
   line_cnt="$(cat ./netlink_diag)"
   sed -i "s/danshui/${line_cnt}/g" package/network/utils/iproute2/Makefile

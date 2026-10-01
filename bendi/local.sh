@@ -1,10 +1,87 @@
 #!/bin/bash
+#=====================================================
+# svn 兼容层（2026 年新增）
+# GitHub 已经在 2024-01-08 关闭了 SVN 接口，脚本里所有
+#   svn co / svn export https://github.com/...
+# 都会直接报错（E170013 / E670008）。下面用同名函数把 svn 调用
+# 翻译成 git 的稀疏检出，调用处一行都不用改。
+# 支持三种写法：
+#   .../<owner>/<repo>/trunk/<路径>             -> 默认分支（main 或 master）
+#   .../<owner>/<repo>/branches/<分支>/<路径>    -> 指定分支
+#   .../<owner>/<repo>/tags/<标签>/<路径>        -> 指定标签
+#=====================================================
+function svn() {
+  local cmd="${1:-}"; shift 2>/dev/null || true
+  case "$cmd" in
+    co|checkout|export|ex) ;;
+    *)
+      echo "svn 兼容层：只支持 co / checkout / export（收到 [$cmd]）" >&2
+      return 1 ;;
+  esac
+  while [[ "${1:-}" == -* ]]; do shift; done
+  local url="${1:-}" dest="${2:-}"
+  if [[ -z "$url" || -z "$dest" ]]; then
+    echo "svn 兼容层：用法 svn co <github地址> <目标目录>" >&2
+    return 1
+  fi
+  case "$url" in
+    https://github.com/*) ;;
+    *)
+      echo "svn 兼容层：只支持 github.com 地址（收到 $url）" >&2
+      return 1 ;;
+  esac
+
+  local rest="${url#https://github.com/}"
+  local owner="${rest%%/*}"; rest="${rest#*/}"
+  local repo="${rest%%/*}";  rest="${rest#*/}"
+  local kind="${rest%%/*}";  rest="${rest#*/}"
+  local ref="" subpath=""
+  case "$kind" in
+    trunk)    subpath="$rest" ;;
+    branches) ref="${rest%%/*}"; subpath="${rest#*/}" ;;
+    tags)     ref="${rest%%/*}"; subpath="${rest#*/}" ;;
+    *)        subpath="${kind}${rest:+/$rest}" ;;
+  esac
+  local repo_url="https://github.com/${owner}/${repo}.git"
+
+  if [[ -z "$ref" ]]; then
+    ref="$(git ls-remote --symref "$repo_url" HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\).*|\1|p' | head -1 || true)"
+    [[ -z "$ref" ]] && ref="master"
+  fi
+
+  local tmpdir; tmpdir="$(mktemp -d)"
+  echo "svn 兼容层: ${owner}/${repo} ${kind}[${ref}] 路径[${subpath:-/}] -> ${dest}"
+  if git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$ref" "$repo_url" "$tmpdir/repo" 2>/dev/null; then
+    if [[ -n "$subpath" ]]; then
+      git -C "$tmpdir/repo" sparse-checkout set --no-cone "$subpath" >/dev/null 2>&1 || true
+    fi
+  elif git clone --quiet --depth 1 --branch "$ref" "$repo_url" "$tmpdir/repo" 2>/dev/null; then
+    :
+  else
+    echo "svn 兼容层: 拉取 ${owner}/${repo} 失败" >&2
+    rm -rf "$tmpdir"; return 1
+  fi
+
+  local src="$tmpdir/repo"
+  [[ -n "$subpath" ]] && src="$tmpdir/repo/$subpath"
+  if [[ ! -d "$src" ]]; then
+    echo "svn 兼容层: ${owner}/${repo} 的 ${kind}[${ref}] 里没有 [${subpath}]" >&2
+    rm -rf "$tmpdir"; return 1
+  fi
+  mkdir -p "$dest" || { rm -rf "$tmpdir"; return 1; }
+  cp -a "$src/." "$dest/" 2>/dev/null || cp -rf "$src/." "$dest/"
+  local rc=$?
+  rm -rf "$tmpdir"
+  return $rc
+}
+
+
 
 #====================================================
 #	System Request:Ubuntu 18.04lts/20.04lts/22.04lts
 #	Author:	281677160
 #	Dscription: Compile openwrt firmware
-#	github: https://github.com/281677160/build-actions
+#	github: https://github.com/authon/Mine-build-actions
 #====================================================
 
 # 字体颜色配置
@@ -119,7 +196,7 @@ if [[ `echo "${PATH}" |grep -ic "windows"` -ge '1' ]] && [[ ! "${WSL_ROUTEPATH}"
   read -t 30 -p " [输入[Y/y]回车一次性解决路径问题，任意键回车则用临时路径编译继续编译](不作处理,30秒后使用临时路径编译继续编译)： " Bendi_Wsl
   case ${Bendi_Wsl} in
   [Yy])
-    bash -c  "$(curl -fsSL https://raw.githubusercontent.com/281677160/bendi/main/wsl.sh)"
+    bash -c  "$(curl -fsSL https://raw.githubusercontent.com/authon/Mine-bendi/main/wsl.sh)"
     if [[ `grep -c "appendWindowsPath = false" /etc/wsl.conf` == '1' ]]; then
       ECHOG "配置已更新，请重启您的电脑"
       exit 0
@@ -163,9 +240,9 @@ function Bendi_Dependent() {
 ECHOG "下载common.sh运行文件"
 cd ${GITHUB_WORKSPACE}
 sudo rm -rf common.sh
-wget -O common.sh https://raw.githubusercontent.com/281677160/common/main/common.sh
+wget -O common.sh https://raw.githubusercontent.com/authon/Mine-common/main/common.sh
 if [[ $? -ne 0 ]]; then
-  curl -fsSL https://raw.githubusercontent.com/281677160/common/main/common.sh > common.sh
+  curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/common.sh > common.sh
 fi
 if [[ `grep -c "TIME" common.sh` -ge '1' ]]; then
   sudo chmod +x common.sh
@@ -196,7 +273,7 @@ function Bendi_DiySetup() {
 cd ${GITHUB_WORKSPACE}
 if [[ ! -f "operates/${FOLDER_NAME}/settings.ini" ]]; then
   ECHOG "下载operates自定义配置文件"
-  curl -fsSL https://raw.githubusercontent.com/281677160/common/main/bendi/tongbu.sh -o tongbu.sh
+  curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/bendi/tongbu.sh -o tongbu.sh
   source tongbu.sh && menu3
   judge "operates自定义配置文件下载"
   rm -rf tongbu.sh
@@ -212,7 +289,7 @@ function Bendi_Tongbu() {
 cd ${GITHUB_WORKSPACE}
 echo
 echo "开始同步上游operates文件"
-curl -fsSL https://raw.githubusercontent.com/281677160/common/main/bendi/tongbu.sh -o tongbu.sh
+curl -fsSL https://raw.githubusercontent.com/authon/Mine-common/main/bendi/tongbu.sh -o tongbu.sh
 source tongbu.sh && ${tongbumemu}
 if [[ $? -ne 0 ]]; then
   rm -rf tongbu.sh
@@ -290,9 +367,9 @@ BENDI_WENJIAN
 
 function github_establish() {
 ECHOY "在operates文件夹里面创建机型文件夹,正在下载上游源码,请稍后..."
-rm -rf chuang && git clone https://github.com/281677160/build-actions chuang > /dev/null 2>&1
+rm -rf chuang && git clone https://github.com/authon/Mine-build-actions chuang > /dev/null 2>&1
 if [[ ! -d "chuang/build" ]]; then
-  rm -rf chuang && svn co https://github.com/281677160/build-actions/trunk/build chuang/build > /dev/null 2>&1
+  rm -rf chuang && svn co https://github.com/authon/Mine-build-actions/trunk/build chuang/build > /dev/null 2>&1
   rm -rf chuang/build/.svn
 fi
 if [[ ! -d "chuang/build" ]]; then
@@ -413,7 +490,7 @@ source "operates/${FOLDER_NAME}/settings.ini"
 echo "WSL_ROUTEPATH=${WSL_ROUTEPATH}" >> ${GITHUB_ENV}
 source ${GITHUB_ENV}
 sudo rm -rf build && cp -Rf operates build
-git clone -b main --depth 1 https://github.com/281677160/common build/common
+git clone -b main --depth 1 https://github.com/authon/Mine-common build/common
 judge "扩展文件下载"
 cp -Rf build/common/common.sh build/${FOLDER_NAME}/common.sh
 cp -Rf build/common/upgrade.sh build/${FOLDER_NAME}/upgrade.sh
@@ -744,9 +821,9 @@ function Bendi_Packaging() {
         ECHOY "正在下载打包所需的程序,请耐心等候~~~"
         git clone --depth 1 https://github.com/ophub/amlogic-s9xxx-openwrt.git ${GITHUB_WORKSPACE}/amlogic
         judge "打包程序下载1"
-        curl -fsSL https://github.com/281677160/common/releases/download/API/stable.api -o amlogic/stable.api
+        curl -fsSL https://github.com/authon/Mine-common/releases/download/API/stable.api -o amlogic/stable.api
         if [[ $? -ne 0 ]]; then
-          curl -fsSL https://github.com/281677160/common/releases/download/API/stable.api -o amlogic/stable.api
+          curl -fsSL https://github.com/authon/Mine-common/releases/download/API/stable.api -o amlogic/stable.api
         fi
         if [[ `grep -c "name" amlogic/stable.api` -eq '0' ]]; then
           print_error "上游仓库amlogic内核版本API下载失败!"
@@ -758,9 +835,9 @@ function Bendi_Packaging() {
     ECHOY "正在下载打包所需的程序,请耐心等候~~~"
     git clone --depth 1 https://github.com/ophub/amlogic-s9xxx-openwrt.git ${GITHUB_WORKSPACE}/amlogic
     judge "打包程序下载1"
-    curl -fsSL https://github.com/281677160/common/releases/download/API/stable.api -o amlogic/stable.api
+    curl -fsSL https://github.com/authon/Mine-common/releases/download/API/stable.api -o amlogic/stable.api
     if [[ $? -ne 0 ]]; then
-      curl -fsSL https://github.com/281677160/common/releases/download/API/stable.api -o amlogic/stable.api
+      curl -fsSL https://github.com/authon/Mine-common/releases/download/API/stable.api -o amlogic/stable.api
     fi
     if [[ `grep -c "name" amlogic/stable.api` -eq '0' ]]; then
       print_error "上游仓库amlogic内核版本API下载失败!"
