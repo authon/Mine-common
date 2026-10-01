@@ -1,9 +1,10 @@
 name: API
+
 on:
   workflow_dispatch:
         
   schedule:
-   - cron: 40 3 */3 * *
+    - cron: 40 3 */3 * *
 
 env:
   REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
@@ -23,7 +24,7 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install -y git subversion git-core wget curl grep jq
+        sudo -E apt-get -qq install -y git git-core wget curl grep jq
         sudo timedatectl set-timezone "$TZ"
         
     - name: 下载API
@@ -31,10 +32,41 @@ jobs:
         cd ${GITHUB_WORKSPACE}
         mkdir -p Github_Api
         cd Github_Api
-        curl -H "Authorization: Bearer ${REPO_TOKEN}" https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest -o AdGuardHome.api
-        if ! grep -E "assets" "AdGuardHome.api"; then
-          wget https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest -O AdGuardHome.api
+
+        # 1) AdGuardHome 最新版本信息（原来就有，保持不动）
+        curl -sS -H "Authorization: Bearer ${REPO_TOKEN}" \
+          https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest -o AdGuardHome.api
+        if ! grep -qE "assets" AdGuardHome.api; then
+          wget -q https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest -O AdGuardHome.api
         fi
+
+        # 2) Amlogic 可用内核版本列表（stable.api）
+        #    以前取自 https://api.github.com/repos/ophub/kernel/contents/kernel_stable/pub/stable
+        #    这个目录已经不存在了（返回 404），所以上游的 stable.api 一直是缺失的。
+        #    ophub/kernel 现在把内核版本放在 kernel_stable 这个 Release 的资产里，
+        #    资产名形如 6.1.120.tar.gz。
+        #    这里把资产名去掉 .tar.gz 后重新拼成 JSON 数组，格式与原来的目录列表一致
+        #    （每个元素带 "name": "x.y.z"），这样编译脚本里的
+        #    grep -Eo '"name": "[0-9]+\.[0-9]+\.[0-9]+"' 不需要任何改动。
+        curl -sS -H "Authorization: Bearer ${REPO_TOKEN}" \
+          https://api.github.com/repos/ophub/kernel/releases/tags/kernel_stable -o kernel_stable.json
+        jq -r '
+          [ .assets[].name
+            | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+\\.tar\\.gz$"))
+            | sub("\\.tar\\.gz$"; "") ]
+          | sort_by(split(".") | map(tonumber))
+          | map({name: ., type: "dir"})
+        ' kernel_stable.json > stable.api
+        rm -f kernel_stable.json
+
+        echo "--- 生成结果 ---"
+        ls -l
+        echo "--- stable.api 开头 ---"
+        head -c 200 stable.api; echo
+
+        test -s AdGuardHome.api || { echo "::error::AdGuardHome.api 生成失败"; exit 1; }
+        test -s stable.api      || { echo "::error::stable.api 生成失败"; exit 1; }
+        grep -q '"name"' stable.api || { echo "::error::stable.api 内容格式不对"; exit 1; }
         
     - name: 发布API
       uses: ncipollo/release-action@main
