@@ -45,6 +45,13 @@ runs:
         git status
         git add .
         git commit -m "${BANBEN_SHUOMING}"
+
+        # 认证改用 host 级 extraheader：不要把 token 放进 URL。
+        # 原因：GitHub 会把含凭据的 git URL 301 重定向到无凭据的规范地址，
+        # git 在重定向后会丢弃 URL 里的凭据 → push 变成匿名 → 要求交互输入用户名 → 失败。
+        # extraheader 是按主机匹配的请求头，重定向到同一主机（github.com）后依然生效。
+        AUTH_B64="$(printf 'x-access-token:%s' "$REPO_TOKEN" | base64 -w0)"
+        git config "http.https://github.com/.extraheader" "AUTHORIZATION: basic ${AUTH_B64}"
         PUSH_SUCCESS=false
         RETRY_COUNT=0
         MAX_RETRIES=5
@@ -57,7 +64,7 @@ runs:
              git reset --hard HEAD
              git add .
           fi
-          if git push --force "https://${REPO_TOKEN}@github.com/${GIT_REPOSITORY}" HEAD:${GIT_REFNAME}; then
+          if git push --force "https://github.com/${GIT_REPOSITORY}.git" HEAD:${GIT_REFNAME}; then
              PUSH_SUCCESS=true
              break
           else
